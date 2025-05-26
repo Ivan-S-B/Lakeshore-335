@@ -12,35 +12,35 @@ Necessary dependencies:
 
 Key Features:
 
-•	Real-time communication with Lakeshore 335 via GPIB.
+•	 Real-time communication with Lakeshore 335 via GPIB.
 
-•	Live plotting of:
+•	 Live plotting of:
 
-o	Temperature readings from Channel A and B;
+•	Temperature readings from Channel A and B;
 
-o	Absolute difference |A − B|;
+•	Absolute difference |A − B|;
 
-o	1st derivative (rate of change, dT/dt) for heating/cooling rates;
+•	1st derivative (rate of change, dT/dt) for heating/cooling rates;
 
-o	2nd derivative (acceleration, d²T/dt²) to observe control stability.
+•	2nd derivative (acceleration, d²T/dt²) to observe control stability.
 
 •	Interactive GUI using tkinter:
 
-o	Temperature displays with real-time values;
+•	Temperature displays with real-time values;
 
-o	Click on any subplot to open a popup window with a zoomed-in version of the selected graph;
+•	Click on any subplot to open a popup window with a zoomed-in version of the selected graph;
 
-o	Heating rate indicators;
+•	Heating rate indicators;
 
-o	Adjustable plot settings (Y-axis scales, time range, channels to display);
+•	Adjustable plot settings (Y-axis scales, time range, channels to display);
 
-o	Dropdown menus for selecting channels for every plot except “Absolute difference plot |A-B|;
+•	Dropdown menus for selecting channels for every plot except “Absolute difference plot |A-B|;
 
-o	CSV logging for data archival;
+•	CSV logging for data archival;
 
-o	Manual control over reading frequency and plot time (length) window;
+•	Manual control over reading frequency and plot time (length) window;
 
-o	Pop up windows (on click) for each of live plots.
+•		Pop up windows (on click) for each of live plots.
 
 •	Adjustable Parameters: Set reading frequency and plot time range through the GUI.
 
@@ -83,7 +83,7 @@ Separated GUIs:
 
 •	Heater Control (in development);
 
-•	 Listing of all GRIB hardware connected to the computer.
+•	Listing of all GRIB hardware connected to the computer.
 
 What still needs to be done:
 
