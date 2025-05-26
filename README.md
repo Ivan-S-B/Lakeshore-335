@@ -1,6 +1,8 @@
 # Lakeshore-335
 Lakeshore 335 Temperature Monitoring 
-
+<span style="color:black">[START]</span>  
+This is your paragraph content that you want to highlight or mark.  
+<span style="color:black">[END]</span>
 Provides a graphical user interface for real-time monitoring, visualization, and logging of temperature data from a Lakeshore 335 temperature controller via GPIB communication using the pyvisa library.
 
 Necessary dependencies: 
