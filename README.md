@@ -87,8 +87,6 @@ Separated GUIs:
 
 What still needs to be done:
 
-•	Combine temperature monitoring with heating control (currently run as a separate GUI);
-
 •	Add zone heating option to the heating control module.
 
 
