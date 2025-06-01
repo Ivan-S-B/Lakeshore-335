@@ -1,5 +1,6 @@
 import pyvisa
 import tkinter as tk
+import traceback
 from tkinter import messagebox, filedialog,ttk,PhotoImage
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
@@ -13,15 +14,18 @@ import csv
 class Lakeshore335App:
     def __init__(self, root):
         self.root = root
-        self.root.title("Lakeshore 335 Temperature Monitoring")
+        self.root.title("Lakeshore 335 Temperature Controller")
         self.root.geometry("1500x900-50+50")
         self.rm = pyvisa.ResourceManager()
+
         self.instrument = None
         self.is_running = False
+
         self.reading_interval = 1.0
         self.csv_logging = False
         self.csv_file = None
         self.csv_writer = None
+
         self.time_range = 300  # Plot time range in seconds
         self.y_scale_a_lower = 0.0
         self.y_scale_a_upper = 400.0
@@ -33,14 +37,24 @@ class Lakeshore335App:
         self.y_scale_2nd_derivative_lower = -1.0
         self.y_scale_2nd_derivative_upper = 1.0
 
+        self.setpoint = 310.0
+        self.ramp_rate = 0.1
+        self.max_output_power = 25  # Maximum power for Output 2 in watts (High Range)
+        self.heater_range = "Low"  # Default range
+        self.selected_heater = 2  # Default to Heater 2
+        self.pid_params = {"P": 50.0, "I": 10.0, "D": 0.0}  # Default PID values
+        self.update_heating_power()
         self.gpib_address = 'GPIB::5::INSTR'
 
         self.temp_a_history = collections.deque(maxlen=45000000)
         self.temp_b_history = collections.deque(maxlen=45000000)
         self.abs_diff_history = collections.deque(maxlen=45000000)
         self.time_history = collections.deque(maxlen=45000000)
+
         self.start_time = time.time()
+
         self.deriv_channel_selection = tk.StringVar()
+
         self.deriv_channel_selection.set("Both")
 
         self.second_deriv_channel_selection = tk.StringVar()
@@ -60,7 +74,7 @@ class Lakeshore335App:
         self.prev_time = None
         self.heating_rate_a = 0.0
         self.heating_rate_b = 0.0
-        self.canvas.mpl_connect("button_press_event", self.on_plot_click)
+        #self.canvas.mpl_connect("button_press_event", self.on_plot_click)
 
     def create_widgets(self):
         main_frame = tk.Frame(self.root)
@@ -73,137 +87,374 @@ class Lakeshore335App:
         self.right_frame = right_frame  # Save for use in plot setup
 
         # Displays
-        tk.Label(left_frame, text="Channel A [K]:", font=("Helvetica", 10)).grid(row=0, column=0, sticky="w", padx=2)
+        tk.Label(left_frame, text="Temperature Reading:", font=("Helvetica", 10, "bold")).grid(row=0, column=0, sticky="w",
+                                                                                          padx=2, pady=(10, 2))
+        tk.Label(left_frame, text="Channel A [K]:", font=("Helvetica", 10)).grid(row=1, column=0, sticky="w", padx=2)
         self.temp_a_display = tk.Label(left_frame, text="N/A", font=("Helvetica", 10))
-        self.temp_a_display.grid(row=1, column=0, sticky="w", padx=2)
+        self.temp_a_display.grid(row=2, column=0, sticky="w", padx=2)
 
-        tk.Label(left_frame, text="Channel B [K]:", font=("Helvetica", 10)).grid(row=0, column=1, sticky="w", padx=2)
+        tk.Label(left_frame, text="Channel B [K]:", font=("Helvetica", 10)).grid(row=1, column=1, sticky="w", padx=2)
         self.temp_b_display = tk.Label(left_frame, text="N/A", font=("Helvetica", 10))
-        self.temp_b_display.grid(row=1, column=1, sticky="w", padx=2)
+        self.temp_b_display.grid(row=2, column=1, sticky="w", padx=2)
 
-        tk.Label(left_frame, text="|A-B| [K]:", font=("Helvetica", 10)).grid(row=0, column=2, sticky="w", padx=2)
+        tk.Label(left_frame, text="|A-B| [K]:", font=("Helvetica", 10)).grid(row=1, column=2, sticky="w", padx=2)
         self.abs_diff_display = tk.Label(left_frame, text="N/A", font=("Helvetica", 10))
-        self.abs_diff_display.grid(row=1, column=2, sticky="w", padx=2)
+        self.abs_diff_display.grid(row=2, column=2, sticky="w", padx=2)
 
         # Heating Rate Displays
-        tk.Label(left_frame, text=" Rate A [K/min]:", font=("Helvetica", 10)).grid(row=2, column=0, sticky="w",
+        tk.Label(left_frame, text=" Rate A [K/min]:", font=("Helvetica", 10)).grid(row=3, column=0, sticky="w",
                                                                                    padx=2)
         self.heating_rate_display_a = tk.Label(left_frame, text="N/A", font=("Helvetica", 10))
-        self.heating_rate_display_a.grid(row=3, column=0, sticky="w", padx=2)
+        self.heating_rate_display_a.grid(row=4, column=0, sticky="w", padx=2)
 
-        tk.Label(left_frame, text="Rate B [K/min]:", font=("Helvetica", 10)).grid(row=2, column=1, sticky="w",
+        tk.Label(left_frame, text="Rate B [K/min]:", font=("Helvetica", 10)).grid(row=3, column=1, sticky="w",
                                                                                   padx=2)
         self.heating_rate_display_b = tk.Label(left_frame, text="N/A", font=("Helvetica", 10))
-        self.heating_rate_display_b.grid(row=3, column=1, sticky="w", padx=2)
+        self.heating_rate_display_b.grid(row=4, column=1, sticky="w", padx=2)
 
         # Frequency
-        tk.Label(left_frame, text="Reading Freq [s]:", font=("Helvetica", 10)).grid(row=4, column=0, sticky="w", padx=2)
+        tk.Label(left_frame, text="Reading Freq [s]:", font=("Helvetica", 10)).grid(row=5, column=0, sticky="w", padx=2)
         self.freq_entry = tk.Entry(left_frame, font=("Helvetica", 10), width=8, justify='center')
         self.freq_entry.insert(0, str(self.reading_interval))
-        self.freq_entry.grid(row=4, column=1, sticky="w", padx=2)
-        tk.Button(left_frame, text="Set", font=("Helvetica", 10), command=self.set_frequency).grid(row=4, column=2,
+        self.freq_entry.grid(row=5, column=1, sticky="w", padx=2)
+        tk.Button(left_frame, text="Set", font=("Helvetica", 10), command=self.set_frequency).grid(row=5, column=2,
                                                                                                         sticky="w",
                                                                                                         padx=2)
         # Time Range
-        tk.Label(left_frame, text="Time Range [s]:", font=("Helvetica", 10)).grid(row=5, column=0, sticky="w", padx=2)
+        tk.Label(left_frame, text="Time Range [s]:", font=("Helvetica", 10)).grid(row=6, column=0, sticky="w", padx=2)
         self.time_range_entry = tk.Entry(left_frame, font=("Helvetica", 10), width=8, justify='center')
         self.time_range_entry.insert(0, str(self.time_range))
-        self.time_range_entry.grid(row=5, column=1, sticky="w", padx=2)
-        tk.Button(left_frame, text="Set", font=("Helvetica", 10), command=self.set_time_range).grid(row=5,
+        self.time_range_entry.grid(row=6, column=1, sticky="w", padx=2)
+        tk.Button(left_frame, text="Set", font=("Helvetica", 10), command=self.set_time_range).grid(row=6,
                                                                                                          column=2,
                                                                                                          sticky="w",
                                                                                                          padx=2)
 
         # Y Scale A
-        tk.Label(left_frame, text="Y Scale A+B [K]:", font=("Helvetica", 10)).grid(row=6, column=0, sticky="w", padx=2)
+        tk.Label(left_frame, text="Y Scale A+B [K]:", font=("Helvetica", 10)).grid(row=7, column=0, sticky="w", padx=2)
         self.y_scale_a_lower_entry = tk.Entry(left_frame, font=("Helvetica", 10), width=8, justify='center')
         self.y_scale_a_lower_entry.insert(0, str(self.y_scale_a_lower))
-        self.y_scale_a_lower_entry.grid(row=6, column=1, sticky="w", padx=2)
+        self.y_scale_a_lower_entry.grid(row=7, column=1, sticky="w", padx=2)
         self.y_scale_a_upper_entry = tk.Entry(left_frame, font=("Helvetica", 10), width=8, justify='center')
         self.y_scale_a_upper_entry.insert(0, str(self.y_scale_a_upper))
-        self.y_scale_a_upper_entry.grid(row=6, column=2, sticky="w", padx=2)
-        tk.Button(left_frame, text="Set", font=("Helvetica", 10), command=self.set_y_scale_a).grid(row=6,
+        self.y_scale_a_upper_entry.grid(row=7, column=2, sticky="w", padx=2)
+        tk.Button(left_frame, text="Set", font=("Helvetica", 10), command=self.set_y_scale_a).grid(row=7,
                                                                                                                column=3,
                                                                                                                sticky="w",
                                                                                                                padx=2)
         # Y Scale Abs Diff
-        tk.Label(left_frame, text=r"Y Scale |A-B|", font=("Helvetica", 10)).grid(row=7, column=0, sticky="w",
-                                                                                        padx=2)
+        tk.Label(left_frame, text=r"Y Scale |A-B|", font=("Helvetica", 10)).grid(row=8, column=0, sticky="w",padx=2)
         self.y_scale_diff_lower_entry = tk.Entry(left_frame, font=("Helvetica", 10), width=8, justify='center')
         self.y_scale_diff_lower_entry.insert(0, str(self.y_scale_diff_lower))
-        self.y_scale_diff_lower_entry.grid(row=7, column=1, sticky="w", padx=2)
+        self.y_scale_diff_lower_entry.grid(row=8, column=1, sticky="w", padx=2)
         self.y_scale_diff_upper_entry = tk.Entry(left_frame, font=("Helvetica", 10), width=8, justify='center')
         self.y_scale_diff_upper_entry.insert(0, str(self.y_scale_diff_upper))
-        self.y_scale_diff_upper_entry.grid(row=7, column=2, sticky="w", padx=2)
+        self.y_scale_diff_upper_entry.grid(row=8, column=2, sticky="w", padx=2)
         tk.Button(left_frame, text="Set", font=("Helvetica", 10), command=self.set_y_scale_diff).grid(
-            row=7, column=3, sticky="w", padx=2)
+            row=8, column=3, sticky="w", padx=2)
 
         # Y Scale 1st Derivative (Rate)
-        tk.Label(left_frame, text="Y Scale dT/dt", font=("Helvetica", 10)).grid(row=8, column=0, sticky="w", padx=2)
+        tk.Label(left_frame, text="Y Scale dT/dt", font=("Helvetica", 10)).grid(row=9, column=0, sticky="w", padx=2)
         self.y_scale_1st_derivative_lower_entry = tk.Entry(left_frame, font=("Helvetica", 10), width=8, justify='center')
         self.y_scale_1st_derivative_lower_entry.insert(0, str(self.y_scale_1st_derivative_lower))
-        self.y_scale_1st_derivative_lower_entry.grid(row=8, column=1, sticky="w", padx=2)
+        self.y_scale_1st_derivative_lower_entry.grid(row=9, column=1, sticky="w", padx=2)
         self.y_scale_1st_derivative_upper_entry = tk.Entry(left_frame, font=("Helvetica", 10), width=8, justify='center')
         self.y_scale_1st_derivative_upper_entry.insert(0, str(self.y_scale_1st_derivative_upper))
-        self.y_scale_1st_derivative_upper_entry.grid(row=8, column=2, sticky="w", padx=2)
-        tk.Button(left_frame, text="Set", font=("Helvetica", 10), command=self.y_scale_1st_derivative).grid(row=8,
+        self.y_scale_1st_derivative_upper_entry.grid(row=9, column=2, sticky="w", padx=2)
+        tk.Button(left_frame, text="Set", font=("Helvetica", 10), command=self.y_scale_1st_derivative).grid(row=9,
                                                                                                                column=3,
                                                                                                                sticky="w",
-                                                                                                               padx=2)
-        # Y Scale 2nd Derivative (Acceletation)
-        tk.Label(left_frame, text="Y Scale d²T/dt²", font=("Helvetica", 10)).grid(row=9, column=0, sticky="w", padx=2)
-        self.y_scale_2nd_derivative_lower_entry = tk.Entry(left_frame, font=("Helvetica", 10), width=8,
-                                                           justify='center')
+                                                                                                           padx=2)
+        # Y Scale 2nd Derivative
+        tk.Label(left_frame, text="Y Scale d²T/dt²", font=("Helvetica", 10)).grid(row=10, column=0, sticky="w", padx=2)
+        self.y_scale_2nd_derivative_lower_entry = tk.Entry(left_frame, font=("Helvetica", 10), width=8,justify='center')
         self.y_scale_2nd_derivative_lower_entry.insert(0, str(self.y_scale_2nd_derivative_lower))
-        self.y_scale_2nd_derivative_lower_entry.grid(row=9, column=1, sticky="w", padx=2)
+        self.y_scale_2nd_derivative_lower_entry.grid(row=10, column=1, sticky="w", padx=2)
 
         self.y_scale_2nd_derivative_upper_entry = tk.Entry(left_frame, font=("Helvetica", 10), width=8,
                                                            justify='center')
         self.y_scale_2nd_derivative_upper_entry.insert(0, str(self.y_scale_2nd_derivative_upper))
-        self.y_scale_2nd_derivative_upper_entry.grid(row=9, column=2, sticky="w", padx=2)
+        self.y_scale_2nd_derivative_upper_entry.grid(row=10, column=2, sticky="w", padx=2)
 
         tk.Button(left_frame, text="Set", font=("Helvetica", 10),
                   command=self.set_y_scale_2nd_derivative).grid(
-            row=9, column=3, sticky="w", padx=2)
+            row=10, column=3, sticky="w", padx=2)
 
         # Channel selection dropdown
-        tk.Label(left_frame, text="A/B Channels:", font=("Helvetica", 10)).grid(row=10, column=0, sticky="w", padx=2)
+        tk.Label(left_frame, text="A/B Channels:", font=("Helvetica", 10)).grid(row=11, column=0, sticky="w", padx=2)
         self.channel_selection = tk.StringVar()
         self.channel_selection.set("Both")  # Default is both
         self.channel_menu = tk.OptionMenu(left_frame, self.channel_selection, "Channel A", "Channel B", "Both",
                                           command=self.update_plot)
-        self.channel_menu.grid(row=10, column=1, sticky="w", padx=2)
+        self.channel_menu.grid(row=11, column=1, sticky="w", padx=2)
         # 1st Derivative (Rate) channel selection
-        tk.Label(left_frame, text="dT/dt Channels:", font=("Helvetica", 10)).grid(row=11, column=0, sticky="w",
+        tk.Label(left_frame, text="dT/dt Channels:", font=("Helvetica", 10)).grid(row=12, column=0, sticky="w",
                                                                                       padx=2)
-        self.deriv_channel_menu = tk.OptionMenu(left_frame, self.deriv_channel_selection, "Channel A", "Channel B",
-                                                "Both", command=self.update_plot)
-        self.deriv_channel_menu.grid(row=11, column=1, sticky="w", padx=2)
+        self.deriv_channel_menu = tk.OptionMenu(left_frame, self.deriv_channel_selection, "Channel A", "Channel B","Both", command=self.update_plot)
+        self.deriv_channel_menu.grid(row=12, column=1, sticky="w", padx=2)
 
         # 2nd Derivative (Acceleration) channel selection
-        tk.Label(left_frame, text="d²T/dt² Channels:", font=("Helvetica", 10)).grid(row=12, column=0, sticky="w",
+        tk.Label(left_frame, text="d²T/dt² Channels:", font=("Helvetica", 10)).grid(row=13, column=0, sticky="w",
                                                                                       padx=2)
         self.second_deriv_channel_menu = tk.OptionMenu(left_frame, self.second_deriv_channel_selection, "Channel A",
                                                        "Channel B", "Both", command=self.update_plot)
-        self.second_deriv_channel_menu.grid(row=12, column=1, sticky="w", padx=2)
+        self.second_deriv_channel_menu.grid(row=13, column=1, sticky="w", padx=2)
 
         # Control buttons
 
-        self.start_stop_button = tk.Button(left_frame, text="Connect", command=self.toggle_reading,
-                                           font=("Helvetica", 10), bg="green")
-        self.start_stop_button.grid(row=13, column=0, sticky="w", pady=2)
+        self.start_stop_button = tk.Button(left_frame, text="Connect", command=self.toggle_reading,font=("Helvetica", 10), bg="green")
+        self.start_stop_button.grid(row=14, column=0, sticky="w", pady=2)
 
-        tk.Button(left_frame, text="Reset Time", command=self.reset_time, font=("Helvetica", 10)).grid(row=13, column=1,
+        tk.Button(left_frame, text="Reset Time", command=self.reset_time, font=("Helvetica", 10)).grid(row=14, column=1,
                                                                                                        sticky="w",
                                                                                                        pady=2)
 
         self.save_button = tk.Button(left_frame, text="Start Saving", command=self.toggle_csv_logging,
                                      font=("Helvetica", 10))
-        self.save_button.grid(row=13, column=2, sticky="w", pady=2)
+        self.save_button.grid(row=14, column=2, sticky="w", pady=2)
+        tk.Label(left_frame, text="Heater Control:", font=("Helvetica", 10, "bold")).grid(row=15, column=0, sticky="w",
+                                                                                          padx=2, pady=(10, 2))
 
-        # Status Indicator
-        self.status_label = tk.Label(self.root, text="Status: Disconnected", fg="red", font=("Helvetica", 10))
-        self.status_label.pack(side="left", anchor="w", pady=2)
+        spacer = tk.Frame(self.root, height=10)
+        spacer.pack(side="top")
+
+
+        #Setpoint Button
+        tk.Label(left_frame, text="Setpoint (K):",font=("Helvetica", 10)).grid(row=16, column=0, sticky="w", pady=2)
+        self.setpoint_entry = tk.Entry(left_frame, width=10)
+        self.setpoint_entry.insert(0, "310.0")
+        self.setpoint_entry.grid(row=16, column=1, sticky="w", pady=2)
+        self.setpoint_btn = tk.Button(left_frame, text="Set",
+                                 command=lambda: self.set_setpoint(self.setpoint_entry.get()),
+                                 bg="blue", fg="white")
+        self.setpoint_btn.grid(row=16, column=2, sticky="w", pady=2)
+
+        # ---- Ramp Rate Field and Button ----
+        tk.Label(left_frame, text="Ramp Rate (K/min):",font=("Helvetica", 10)).grid(row=17, column=0, sticky="w", pady=2)
+        ramp_entry = tk.Entry(left_frame, width=10)
+        ramp_entry.insert(0, "0.1")
+        ramp_entry.grid(row=17, column=1, sticky="w", pady=2)
+        ramp_btn = tk.Button(left_frame, text="Set", command=lambda: self.set_ramp_rate(ramp_entry.get()),
+                             bg="blue",
+                             fg="white")
+        ramp_btn.grid(row=17, column=2, sticky="w", pady=2)
+
+        # ---- Heater Range Dropdown ----
+        tk.Label(left_frame, text="Heater Range:",font=("Helvetica", 10)).grid(row=18, column=0, sticky="w", pady=2)
+        range_var = tk.StringVar(value="Low")
+        range_menu = tk.OptionMenu(left_frame, range_var, "Low", "Med", "High",
+                                   command=lambda value: setattr(self, 'heater_range', value))
+        range_menu.grid(row=18, column=1, sticky="w", pady=2)
+
+        # ---- Heater Selector Dropdown ----
+        tk.Label(left_frame, text="Select Heater:",font=("Helvetica", 10)).grid(row=19, column=0, sticky="w", pady=2)
+        heater_var = tk.StringVar(value="Heater 2")
+        heater_menu = tk.OptionMenu(left_frame, heater_var, "Heater 1", "Heater 2",
+                                    command=lambda value: setattr(self, 'selected_heater',
+                                                                  1 if value == "Heater 1" else 2))
+        heater_menu.grid(row=19, column=1, sticky="w", pady=2)
+
+        # ---- PID Parameters Fields ----
+        tk.Label(left_frame, text="P:",font=("Helvetica", 10)).grid(row=20, column=0, sticky="w", pady=2)
+        pid_p_entry = tk.Entry(left_frame, width=10)
+        pid_p_entry.insert(0, "50.0")
+        pid_p_entry.grid(row=20, column=1, sticky="w", pady=2)
+
+        tk.Label(left_frame, text="I:",font=("Helvetica", 10)).grid(row=21, column=0, sticky="w", pady=2)
+        pid_i_entry = tk.Entry(left_frame, width=10)
+        pid_i_entry.insert(0, "10.0")
+        pid_i_entry.grid(row=21, column=1, sticky="w", pady=2)
+
+        tk.Label(left_frame, text="D:",font=("Helvetica", 10)).grid(row=22, column=0, sticky="w", pady=2)
+        pid_d_entry = tk.Entry(left_frame, width=10)
+        pid_d_entry.insert(0, "0.0")
+        pid_d_entry.grid(row=22, column=1, sticky="w", pady=2)
+
+        # ---- Set PID Button ----
+        set_pid_btn = tk.Button(left_frame, text="Set PID",font=("Helvetica", 10), command=lambda: self.set_pid(
+            float(pid_p_entry.get()), float(pid_i_entry.get()), float(pid_d_entry.get())),
+                                bg="blue", fg="white")
+        set_pid_btn.grid(row=23, column=0, sticky="w", pady=2)
+        # Start/Stop Heating Buttons
+
+        tk.Button(left_frame, text="Start Heating", font=("Helvetica", 10), bg="lightgreen",
+                  command=self.start_heating).grid(row=24, column=0, sticky="w", padx=2)
+        tk.Button(left_frame, text="Stop Heating", font=("Helvetica", 10), bg="lightcoral",
+                  command=self.stop_heating).grid(row=24, column=1, sticky="w", padx=2)
+        # Heating Power
+        self.power_label_var = tk.StringVar()
+        self.power_label_var.set("Output 2 Power: N/A")
+        self.power_label = tk.Label(self.root, textvariable=self.power_label_var, font=("Helvetica", 14), fg="blue")
+        self.power_label.pack(side="top",anchor="w")  # You can use .grid(...) if using grid layout
+
+
+        # Status label
+        self.status_label = tk.Label(self.root, text="Status: Disconnected", fg="red", font=("Helvetica", 14))
+        self.status_label.pack(side="top", anchor="w", pady=2)
+    def set_setpoint(self, value):
+        if self.instrument is None and self.connect_to_instrument() is None:
+            return
+
+        try:
+            self.setpoint = float(value)
+            self.instrument.write(f"SETP {self.selected_heater},{self.setpoint}")
+            print(f"[Info] Setpoint set to {self.setpoint} K")
+        except ValueError:
+            messagebox.showerror("Input Error", "Invalid setpoint value.")
+        except Exception as e:
+            print(f"[Error] Setpoint failed: {e}")
+            traceback.print_exc()
+            messagebox.showerror("Setpoint Error", str(e))
+
+    def set_ramp_rate(self, value):
+        if self.instrument is None:
+            self.connect_to_instrument()
+        if self.instrument is None:
+            return
+        try:
+            self.ramp_rate = float(value)
+            self.instrument.write(f"RAMP {self.selected_heater},1,{self.ramp_rate}")
+            print(f"[Info] Ramp rate set to {self.ramp_rate} K/min")
+        except ValueError:
+            messagebox.showerror("Input Error", "Invalid ramp rate value.")
+        except Exception as e:
+            print(f"[Error] Ramp rate failed: {e}")
+            traceback.print_exc()
+            messagebox.showerror("Ramp Error", str(e))
+
+    def start_heating(self):
+        if self.instrument is None:
+            self.connect_to_instrument()
+        if self.instrument is None:
+            return
+        try:
+            self.instrument.write(f"OUTMODE {self.selected_heater},1,A")  # Closed-loop using sensor A
+            self.instrument.write(f"SETP {self.selected_heater},{self.setpoint}")
+            self.instrument.write(f"RAMP {self.selected_heater},1,{self.ramp_rate}")
+            self.instrument.write(f"RANGE {self.selected_heater},{self.get_range_code()}")  # Set the selected range
+            self.instrument.write(
+                f"PID {self.selected_heater},{self.pid_params['P']},{self.pid_params['I']},{self.pid_params['D']}")
+            print(f"[Info] Heating started for Heater {self.selected_heater}.")
+        except Exception as e:
+            print(f"[Error] Start failed: {e}")
+            traceback.print_exc()
+            messagebox.showerror("Start Error", str(e))
+
+    def get_range_watts(self, heater_number):
+        try:
+            range_code = int(self.instrument.query(f"RANGE? {heater_number}").strip())
+
+            if heater_number == 1:
+                # Heater 1: 50 W max
+                range_map = {0: 0.0, 1: 5.0, 2: 25.0, 3: 50.0}
+            elif heater_number == 2:
+                # Heater 2: 25 W max
+                range_map = {0: 0.0, 1: 2.5, 2: 10.0, 3: 25.0}
+            else:
+                range_map = {}
+
+            return range_map.get(range_code, 0.0)
+
+        except Exception as e:
+            print(f"Error reading heater range: {e}")
+            return 0.0
+
+    def update_heating_power(self):
+        if self.instrument is not None:
+            try:
+                heater_number = self.selected_heater
+                percent_str = self.instrument.query(f"HTR? {heater_number}")
+                percent_val = float(percent_str.strip())
+
+                max_power = self.get_range_watts(heater_number)
+                power_watts = percent_val / 100.0 * max_power
+
+                self.power_label_var.set(
+                    f"Output {heater_number} Power: {percent_val:.1f}% of {max_power:.1f} W → {power_watts:.2f} W"
+                )
+            except Exception as e:
+                self.power_label_var.set(f"Output {heater_number} Power: Error")
+                print("Power read error:", e)
+
+        self.root.after(1000, self.update_heating_power)
+
+
+    def update_power(self):
+        power = self.get_heater_power()
+        power_label.config(text=f"Current Heater Power: {power}")
+        root.after(1000, self.update_power)  # Update every second
+        self.update_power()
+    def stop_heating(self):
+        if self.instrument is None:
+            print("[Warning] Not connected.")
+            return
+        try:
+            self.instrument.write(f"RANGE {self.selected_heater},0")  # Heater off
+            print(f"[Info] Heating stopped for Heater {self.selected_heater}.")
+        except Exception as e:
+            print(f"[Error] Stop failed: {e}")
+            traceback.print_exc()
+            messagebox.showerror("Stop Error", str(e))
+
+    def get_heater_power(self):
+        if self.instrument is None:
+            return "N/A"
+        try:
+            # Query for the raw heater output level (0.0 to 100.0%)
+            raw_level = float(self.instrument.query(f"HTR? {self.selected_heater}").strip())
+
+            # Convert the raw level from the range 0-100% to a fraction (0.0 to 1.0)
+            fraction = raw_level / 100.0
+
+            # Set the maximum power based on the selected range
+            if self.heater_range == "Low":
+                max_power = 0.25  # Low range: 0.25 W
+            elif self.heater_range == "Med":
+                max_power = 2.5  # Medium range: 2.5 W
+            elif self.heater_range == "High":
+                max_power = 25  # High range: 25 W
+            else:
+                max_power = 0.25  # Default to Low if range is unrecognized
+
+            # Calculate actual power in watts
+            watts = fraction * max_power
+
+            # Return formatted string with both watts and percentage
+            return f"{watts:.3f} W ({raw_level:.1f}%)"
+        except Exception as e:
+            print(f"[Error] Power read failed: {e}")
+            traceback.print_exc()
+            return "Error"
+
+    def get_range_code(self):
+        if self.heater_range == "Low":
+            return 1
+        elif self.heater_range == "Med":
+            return 2
+        elif self.heater_range == "High":
+            return 3
+        else:
+            return 1  # Default to Low if range is not recognized
+
+    def close(self):
+        if self.instrument:
+            self.instunstrument.close()
+        print("[Info] Connection closed.")
+
+    def set_pid(self, P, I, D):
+        # Update the PID parameters
+        self.pid_params = {"P": P, "I": I, "D": D}
+        if self.instrument is None:
+            self.connect_to_instrument()
+        if self.instrument is None:
+            return
+        try:
+            self.instrument.write(f"PID {self.selected_heater},{P},{I},{D}")
+            print(f"[Info] PID values set to P: {P}, I: {I}, D: {D}")
+        except Exception as e:
+            print(f"[Error] PID setting failed: {e}")
+            traceback.print_exc()
+            messagebox.showerror("PID Error", str(e))
 
     def setup_plot(self):
         # Create subplots: 4 axes in total (2 vertical, 2 horizontal)
@@ -270,6 +521,7 @@ class Lakeshore335App:
 
         # Create the canvas for the Tkinter GUI
         self.canvas = FigureCanvasTkAgg(self.fig, master=self.right_frame)
+        self.canvas.mpl_connect("button_press_event", self.on_plot_click)
         self.canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
         self.fig.subplots_adjust(left=0.15, right=0.85, top=0.95, bottom=0.05)
 
@@ -717,6 +969,7 @@ class Lakeshore335App:
                 raise ValueError
         except ValueError:
             messagebox.showerror("Invalid Input", "Please enter valid numbers for Y Scale 2nd Derivative.")
+
     def set_frequency(self):
         try:
             value = float(self.freq_entry.get())
